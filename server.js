@@ -1,10 +1,18 @@
  express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
 const app = express();
 const port = process.env.PORT || 3000;
 const dbFile = process.env.DB_PATH || path.join(__dirname, 'mapdata.db');
+
+// Ensure the directory exists for the database file
+const dbDir = path.dirname(dbFile);
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+  console.log('Created database directory:', dbDir);
+}
 
 // open (or create) the DB
 const db = new sqlite3.Database(dbFile, (err) => {
@@ -71,7 +79,7 @@ app.post('/claims', (req, res) => {
   });
 });
 
-// API: clear all claims (debug endpoint) — DELETE /claims (localhost only)
+// API: clear all claims (debug endpoint) — DELETE /claims (localhost only with password)
 app.delete('/claims', (req, res) => {
   // Check if request is from localhost/host IP
   const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
@@ -83,6 +91,13 @@ app.delete('/claims', (req, res) => {
   if (!isLocalhost) {
     console.log('Unauthorized clear DB attempt from:', clientIp);
     return res.status(403).json({ error: 'Forbidden: Only host can clear database' });
+  }
+  
+  // Check password
+  const { password } = req.body || {};
+  if (password !== 'password') {
+    console.log('Invalid password for clear DB from:', clientIp);
+    return res.status(401).json({ error: 'Invalid password' });
   }
   
   db.run('DELETE FROM claims', function(err) {

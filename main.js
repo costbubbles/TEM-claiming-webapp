@@ -624,12 +624,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (confirmBtn) confirmBtn.addEventListener('click', confirmPendingClaims);
     if (cancelBtn) cancelBtn.addEventListener('click', resetPendingClaims);
 
-    // clear DB button (debug) — asks for confirmation then calls DELETE /claims
+    // clear DB button (debug) — asks for confirmation and password then calls DELETE /claims
     if (clearDbBtn) clearDbBtn.addEventListener('click', async () => {
       if (!confirm('Clear all saved claims from the database? This cannot be undone.')) return;
+      const password = prompt('Enter password to clear database:');
+      if (!password) return;
       try {
-        const res = await fetch('/claims', { method: 'DELETE' });
-        if (!res.ok) throw new Error('Server returned ' + res.status);
+        const res = await fetch('/claims', { 
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password })
+        });
+        if (!res.ok) {
+          const body = await res.json();
+          throw new Error(body.error || 'Server returned ' + res.status);
+        }
         const body = await res.json();
         console.log('Cleared DB:', body);
         // clear overlays and reload
