@@ -75,24 +75,20 @@ document.addEventListener('DOMContentLoaded', async () => {
     ctx.imageSmoothingEnabled = false;
     try { ctx.imageSmoothingQuality = 'low'; } catch (e) {}
 
-    // Instead of relying on transforms, draw the base image / overlays with explicit dest rects
+    // Calculate dest rect once to ensure base image and overlays use identical coordinates
     const destX = Math.round(panX * dpr);
     const destY = Math.round(panY * dpr);
-    const destW = Math.round(img.width * dpr * scale);
-    const destH = Math.round(img.height * dpr * scale);
+    const destW = Math.round(img.width * scale * dpr);
+    const destH = Math.round(img.height * scale * dpr);
 
-    // draw base image to the canvas (device-pixel coords)
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.drawImage(img, 0, 0, img.width, img.height, destX, destY, destW, destH);
-
-    // draw overlays using same dest rect, composited over the base image
+    // draw overlays FIRST (behind the base image) using identical dest rect for pixel-perfect alignment
     try {
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
-      if (typeof savedOverlay !== 'undefined') ctx.drawImage(savedOverlay, 0, 0, savedOverlay.width, savedOverlay.height, destX, destY, destW, destH);
-      if (typeof tempOverlay !== 'undefined') ctx.drawImage(tempOverlay, 0, 0, tempOverlay.width, tempOverlay.height, destX, destY, destW, destH);
+      if (typeof savedOverlay !== 'undefined') ctx.drawImage(savedOverlay, 0, 0, img.width, img.height, destX, destY, destW, destH);
+      if (typeof tempOverlay !== 'undefined') ctx.drawImage(tempOverlay, 0, 0, img.width, img.height, destX, destY, destW, destH);
 
-      // draw transient overlay composites (small region canvases) on top to guarantee visibility
+      // draw transient overlay composites
       overlayComposites.forEach(o => {
         try {
           const sx = o.minX, sy = o.minY, sw = o.canvas.width, sh = o.canvas.height;
@@ -111,6 +107,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
     }
+
+    // draw base image on TOP (device-pixel coords) so borders occlude overlay edges
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.drawImage(img, 0, 0, img.width, img.height, destX, destY, destW, destH);
 
     // helper to map image coords to canvas pixels
     function imgToCanvasX(x) { return Math.round(x * dpr * scale + panX * dpr); }
@@ -176,21 +176,32 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   function updateSwatch(teamName) {
     if (!teamSwatch) return;
-    const color = settings.Teams && settings.Teams[teamName] && settings.Teams[teamName].color;
-    teamSwatch.style.backgroundColor = color || 'transparent';
-    teamSwatch.title = teamName ? `${teamName} (${color})` : '';
+    if (teamName === '__EMPTY__') {
+      teamSwatch.style.backgroundColor = '#ffffff';
+      teamSwatch.title = 'Remove claims';
+    } else {
+      const color = settings.Teams && settings.Teams[teamName] && settings.Teams[teamName].color;
+      teamSwatch.style.backgroundColor = color || 'transparent';
+      teamSwatch.title = teamName ? `${teamName} (${color})` : '';
+    }
   }
 
   if (teamSelect && settings.Teams && Object.keys(settings.Teams).length) {
     teamSelect.innerHTML = '';
     const names = Object.keys(settings.Teams);
+    // Add "Empty" option at the beginning for removing claims
+    const emptyOpt = document.createElement('option');
+    emptyOpt.value = '__EMPTY__';
+    emptyOpt.textContent = 'Remove Claim';
+    teamSelect.appendChild(emptyOpt);
+    
     names.forEach((name) => {
       const opt = document.createElement('option');
       opt.value = name;
       opt.textContent = name;
       teamSelect.appendChild(opt);
     });
-    selectedTeam = names[0];
+    selectedTeam = '__EMPTY__';
     teamSelect.value = selectedTeam;
     updateSwatch(selectedTeam);
     teamSelect.addEventListener('change', (e) => {
@@ -204,6 +215,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   function getSelectedTeamColor() {
+    if (selectedTeam === '__EMPTY__') return '#ffffff'; // white for remove
     return settings.Teams && settings.Teams[selectedTeam] && settings.Teams[selectedTeam].color;
   }
 
@@ -215,6 +227,17 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   try {
     img = await loadImage(settings.mapImage);
+    
+    // Fit map to viewport: calculate scale to fit entire image
+    const canvasRect = canvas.getBoundingClientRect();
+    const scaleX = canvasRect.width / img.width;
+    const scaleY = canvasRect.height / img.height;
+    scale = Math.min(scaleX, scaleY, 1); // don't scale up, max 1:1
+    
+    // Center the image
+    panX = (canvasRect.width - img.width * scale) / 2;
+    panY = (canvasRect.height - img.height * scale) / 2;
+    
     // create offscreen canvas at image natural size for pixel sampling and exact pixels
     const offscreen = document.createElement('canvas');
     offscreen.width = img.width;
@@ -265,9 +288,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     function isBaseWhiteXY(x, y) {
       if (x < 0 || y < 0 || x >= offscreen.width || y >= offscreen.height) return false;
       const idx = (y * offscreen.width + x) * 4;
-      const r = baseData[idx], g = baseData[idx+1], b = baseData[idx+2], a = baseData[idx+3];
-      const tol = 250;
-      return a > 200 && r >= tol && g >= tol && b >= tol;
+      const a = baseData[idx + 3];
+      // check for transparent pixels (alpha === 0)
+      return a === 0;
     }
 
     function sampleBaseRGBA(x, y) {
@@ -326,23 +349,24 @@ document.addEventListener('DOMContentLoaded', async () => {
       const stack = [{ x: sx, y: sy }];
       let filledCount = 0;
       const visited = new Uint8Array(w * h);
-      let minX = w, minY = h, maxX = 0, maxY = 0;
+      const borderPixels = []; // track only boundary pixels for overfill
+      let minX = w, minY = h, maxX = -1, maxY = -1;
 
       while (stack.length) {
         const p = stack.pop();
         let x = p.x;
         let y = p.y;
 
+        // skip if already visited or not white
+        if (visited[y * w + x] || !isBaseWhiteXY(x, y)) continue;
+
         // move to leftmost pixel of this span
         while (x > 0 && isBaseWhiteXY(x - 1, y) && !pixelHasFill(getIndex(x - 1, y)) && !visited[y * w + (x - 1)]) x--;
-        // move to rightmost pixel of this span
-        let x2 = x;
-        while (x2 < w - 1 && isBaseWhiteXY(x2 + 1, y) && !pixelHasFill(getIndex(x2 + 1, y)) && !visited[y * w + (x2 + 1)]) x2++;
-
-        // fill span x..x2
-        for (let i = x; i <= x2; i++) {
+        
+        // fill rightward from x
+        let i = x;
+        while (i < w && isBaseWhiteXY(i, y) && !pixelHasFill(getIndex(i, y)) && !visited[y * w + i]) {
           const idx = getIndex(i, y);
-          if (visited[y * w + i]) continue;
           data[idx] = fillRGBA[0];
           data[idx + 1] = fillRGBA[1];
           data[idx + 2] = fillRGBA[2];
@@ -353,22 +377,64 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (i > maxX) maxX = i;
           if (y < minY) minY = y;
           if (y > maxY) maxY = y;
+          
+          // check if this is a border pixel (has at least one non-white orthogonal neighbor)
+          const hasNonWhiteNeighbor = 
+            (i > 0 && !isBaseWhiteXY(i - 1, y)) ||
+            (i < w - 1 && !isBaseWhiteXY(i + 1, y)) ||
+            (y > 0 && !isBaseWhiteXY(i, y - 1)) ||
+            (y < h - 1 && !isBaseWhiteXY(i, y + 1));
+          
+          if (hasNonWhiteNeighbor) {
+            borderPixels.push({ x: i, y: y });
+          }
+          
+          i++;
         }
+        const x2 = i - 1;
 
         // check the line above and below for new spans
-        for (let i = x; i <= x2; i++) {
+        for (let j = x; j <= x2; j++) {
           // above
-          if (y > 0 && isBaseWhiteXY(i, y - 1) && !pixelHasFill(getIndex(i, y - 1)) && !visited[(y - 1) * w + i]) {
-            stack.push({ x: i, y: y - 1 });
+          if (y > 0 && isBaseWhiteXY(j, y - 1) && !pixelHasFill(getIndex(j, y - 1)) && !visited[(y - 1) * w + j]) {
+            stack.push({ x: j, y: y - 1 });
           }
           // below
-          if (y < h - 1 && isBaseWhiteXY(i, y + 1) && !pixelHasFill(getIndex(i, y + 1)) && !visited[(y + 1) * w + i]) {
-            stack.push({ x: i, y: y + 1 });
+          if (y < h - 1 && isBaseWhiteXY(j, y + 1) && !pixelHasFill(getIndex(j, y + 1)) && !visited[(y + 1) * w + j]) {
+            stack.push({ x: j, y: y + 1 });
           }
         }
       }
 
       if (filledCount === 0) return false;
+      
+      // Overfill by 1 pixel orthogonally: only expand border pixels
+      for (const p of borderPixels) {
+        const neighbors = [
+          { x: p.x - 1, y: p.y },
+          { x: p.x + 1, y: p.y },
+          { x: p.x, y: p.y - 1 },
+          { x: p.x, y: p.y + 1 }
+        ];
+        
+        for (const n of neighbors) {
+          if (n.x >= 0 && n.y >= 0 && n.x < w && n.y < h) {
+            const idx = getIndex(n.x, n.y);
+            if (data[idx + 3] === 0) { // if not already filled
+              data[idx] = fillRGBA[0];
+              data[idx + 1] = fillRGBA[1];
+              data[idx + 2] = fillRGBA[2];
+              data[idx + 3] = fillRGBA[3];
+              // update bounding box
+              if (n.x < minX) minX = n.x;
+              if (n.x > maxX) maxX = n.x;
+              if (n.y < minY) minY = n.y;
+              if (n.y > maxY) maxY = n.y;
+            }
+          }
+        }
+      }
+      
       overlayCtx.putImageData(imgData, 0, 0);
       // sample a pixel at seed to confirm overlay contains color
       try {
@@ -389,6 +455,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         tempCanvas.width = regionW;
         tempCanvas.height = regionH;
         const tempC = tempCanvas.getContext('2d');
+        tempC.imageSmoothingEnabled = false;
         // copy this region from overlayCtx
         const regionData = overlayCtx.getImageData(minX, minY, regionW, regionH);
         tempC.putImageData(regionData, 0, 0);
@@ -407,15 +474,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       const claim = { imgX: Math.round(imgX), imgY: Math.round(imgY), date: new Date().toISOString(), team, color };
       pendingClaims.push(claim);
       console.log('Added pending claim', claim);
-      // apply temporary gray fill to temp overlay
-      const gray = hexToRgba('#cccccc', 200);
-      let ok = floodFillOverlay(tempCtx, claim.imgX, claim.imgY, gray);
+      // apply temporary fill with team color at 50% opacity
+      const fillColor = hexToRgba(color || '#cccccc', 128);
+      let ok = floodFillOverlay(tempCtx, claim.imgX, claim.imgY, fillColor);
       if (!ok) {
         console.log('Flood fill failed for pending claim at', claim.imgX, claim.imgY, '- sampled:', sampleBaseRGBA(claim.imgX, claim.imgY));
         const found = findNearestWhitePixel(claim.imgX, claim.imgY, 20);
         if (found) {
           console.log('Found nearby white pixel for pending claim at', found.x, found.y, ' — using that seed');
-          ok = floodFillOverlay(tempCtx, found.x, found.y, gray);
+          ok = floodFillOverlay(tempCtx, found.x, found.y, fillColor);
         }
         if (!ok) console.log('Pending claim flood-fill still failed at', claim.imgX, claim.imgY);
       }
@@ -426,17 +493,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     function resetPendingClaims() {
       pendingClaims.length = 0;
       if (tempCtx) tempCtx.clearRect(0,0,tempOverlay.width,tempOverlay.height);
+      // clear and rebuild overlayComposites from saved claims only
       overlayComposites.length = 0;
       updatePendingCount();
-      draw();
+      reloadSavedClaims(); // rebuild saved overlayComposites
     }
 
     async function reloadSavedClaims() {
+      const loadingIndicator = document.getElementById('loadingIndicator');
+      if (loadingIndicator) loadingIndicator.style.display = 'block';
+      
       try {
         const res = await fetch('/claims');
         if (!res.ok) throw new Error('Failed to fetch claims: ' + res.status);
         const body = await res.json();
         const claims = body.claims || [];
+        // Update lastClaimCount if it exists in outer scope
+        if (typeof lastClaimCount !== 'undefined') lastClaimCount = claims.length;
         // clear saved overlay
         savedCtx.clearRect(0,0,savedOverlay.width,savedOverlay.height);
         overlayComposites.length = 0;
@@ -464,6 +537,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         draw();
       } catch (e) {
         console.error('Failed to reload saved claims', e);
+      } finally {
+        if (loadingIndicator) loadingIndicator.style.display = 'none';
       }
     }
 
@@ -501,7 +576,7 @@ document.addEventListener('DOMContentLoaded', async () => {
           console.warn('Error while checking overlaps on temp overlay', e);
         }
 
-        // delete overlapping claims first (so we're effectively overwriting)
+        // delete overlapping claims first
         if (idsToDelete.size) {
           try {
             const delRes = await fetch('/claims/delete', {
@@ -516,15 +591,24 @@ document.addEventListener('DOMContentLoaded', async () => {
           }
         }
 
-        // now POST new claims
-        const res = await fetch('/claims', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ claims: pendingClaims })
-        });
-        if (!res.ok) throw new Error('Server returned ' + res.status);
-        const body = await res.json();
-        console.log('Saved claims', body);
+        // Check if any pending claims are "Empty" (removal only)
+        const nonEmptyClaims = pendingClaims.filter(c => c.team !== '__EMPTY__');
+        const hasEmptyClaims = pendingClaims.some(c => c.team === '__EMPTY__');
+
+        // Only POST new claims if there are non-empty claims
+        if (nonEmptyClaims.length > 0) {
+          const res = await fetch('/claims', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ claims: nonEmptyClaims })
+          });
+          if (!res.ok) throw new Error('Server returned ' + res.status);
+          const body = await res.json();
+          console.log('Saved claims', body);
+        } else if (hasEmptyClaims) {
+          console.log('Only empty claims - deleted overlapping regions without adding new claims');
+        }
+
         resetPendingClaims();
         await reloadSavedClaims();
       } catch (err) {
@@ -561,10 +645,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // override claimRegion to check image pixel and add pending claim if white
+    // override claimRegion to check image pixel and add pending claim if transparent
     claimRegion = (imgX, imgY) => {
       if (!isBaseWhiteXY(Math.floor(imgX), Math.floor(imgY))) {
-        console.log('Clicked non-white pixel — ignoring claim at', imgX, imgY);
+        console.log('Clicked non-transparent pixel — ignoring claim at', imgX, imgY);
         return;
       }
       addPendingClaim(imgX, imgY);
@@ -574,6 +658,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     draw();
     // also load saved claims so the overlay shows past fills
     reloadSavedClaims();
+    
+    // Poll for new claims every 3 seconds to auto-update from other machines
+    let lastClaimCount = 0;
+    setInterval(async () => {
+      try {
+        const res = await fetch('/claims');
+        if (!res.ok) return;
+        const body = await res.json();
+        const claims = body.claims || [];
+        // Only reload if the number of claims changed
+        if (claims.length !== lastClaimCount) {
+          console.log('Claims updated from server:', claims.length, 'claims (was', lastClaimCount, ')');
+          lastClaimCount = claims.length;
+          await reloadSavedClaims();
+        }
+      } catch (e) {
+        // silently ignore polling errors
+      }
+    }, 3000);
+    
   } catch (err) {
     console.error('Failed to load map image', err);
     ctx.setTransform(1,0,0,1,0,0);

@@ -4,7 +4,7 @@ const path = require('path');
 
 const app = express();
 const port = process.env.PORT || 3000;
-const dbFile = path.join(__dirname, 'mapdata.db');
+const dbFile = process.env.DB_PATH || path.join(__dirname, 'mapdata.db');
 
 // open (or create) the DB
 const db = new sqlite3.Database(dbFile, (err) => {
@@ -71,8 +71,20 @@ app.post('/claims', (req, res) => {
   });
 });
 
-// API: clear all claims (debug endpoint) — DELETE /claims
+// API: clear all claims (debug endpoint) — DELETE /claims (localhost only)
 app.delete('/claims', (req, res) => {
+  // Check if request is from localhost/host IP
+  const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+  const isLocalhost = clientIp === '127.0.0.1' || 
+                      clientIp === '::1' || 
+                      clientIp === '::ffff:127.0.0.1' ||
+                      clientIp === 'localhost';
+  
+  if (!isLocalhost) {
+    console.log('Unauthorized clear DB attempt from:', clientIp);
+    return res.status(403).json({ error: 'Forbidden: Only host can clear database' });
+  }
+  
   db.run('DELETE FROM claims', function(err) {
     if (err) {
       console.error('Failed to clear claims', err);
