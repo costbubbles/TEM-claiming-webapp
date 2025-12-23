@@ -101,8 +101,8 @@ document.addEventListener('DOMContentLoaded', async () => {
           /* ignore */
         }
       });
-      // optionally keep overlayComposites small — they will be cleared when overlays are reloaded or cleared explicitly
-      if (overlayComposites.length > 200) overlayComposites.shift();
+      // Note: overlayComposites will be cleared when overlays are reloaded or cleared explicitly
+      // No limit on overlayComposites to allow unlimited claims
     } finally {
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
@@ -460,7 +460,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const regionData = overlayCtx.getImageData(minX, minY, regionW, regionH);
         tempC.putImageData(regionData, 0, 0);
         overlayComposites.push({ canvas: tempCanvas, minX, minY, maxX, maxY });
-        if (overlayComposites.length > 50) overlayComposites.shift();
+        // No limit on overlayComposites to allow unlimited claims
       } catch (e) {
         console.warn('Could not create overlay composite', e);
       }
@@ -527,7 +527,7 @@ document.addEventListener('DOMContentLoaded', async () => {
               console.log('Found nearby white pixel for saved claim at', found.x, found.y, ' — retrying fill');
               // store debug marker to show where we seeded
               debugSeeds.push({ x: found.x, y: found.y, color: '#f0f' });
-              if (debugSeeds.length > 100) debugSeeds.shift();
+              // No limit on debugSeeds to allow unlimited claims
               ok = floodFillOverlay(savedCtx, found.x, found.y, rgba);
               if (ok) console.log('Saved claim filled at nearby seed', found.x, found.y);
             }

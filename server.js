@@ -154,7 +154,7 @@ app.post('/claims/delete', (req, res) => {
 
 // API: list claims
 app.get('/claims', (req, res) => {
-  db.all('SELECT * FROM claims ORDER BY id DESC LIMIT 100', (err, rows) => {
+  db.all('SELECT * FROM claims ORDER BY id DESC', (err, rows) => {
     if (err) return res.status(500).json({ error: 'DB read failed' });
     res.json({ claims: rows });
   });
