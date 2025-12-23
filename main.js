@@ -1,6 +1,84 @@
   // Pan/zoom canvas with click-vs-drag detection
 
 let settings = {};
+let isAuthenticated = false;
+let isAdmin = false;
+let userClaimsUsed = 0;
+let userClaimLimit = 0;
+let userClaimsRemaining = 0;
+let filteredClaimIds = new Set(); // Store IDs of claims to highlight in purple
+
+// Show/hide auth modal
+function showAuthModal() {
+  const modal = document.getElementById('authModal');
+  if (modal) {
+    modal.style.display = 'flex';
+  }
+}
+
+function hideAuthModal() {
+  const modal = document.getElementById('authModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+// Update admin toolbar visibility
+function updateAdminToolbar() {
+  const adminToolbar = document.querySelector('.toolbar-bottom-right');
+  if (adminToolbar) {
+    adminToolbar.style.display = isAdmin ? 'block' : 'none';
+  }
+}
+
+// Update claims info display
+function updateClaimsInfo(data, pendingCount = 0) {
+  const claimsInfo = document.getElementById('claimsInfo');
+  if (claimsInfo && data) {
+    if (data.dailyClaimLimit === -1) {
+      claimsInfo.textContent = 'Claims: Unlimited';
+    } else {
+      const remaining = data.claimsRemaining || 0;
+      const effectiveRemaining = Math.max(0, remaining - pendingCount);
+      if (pendingCount > 0) {
+        claimsInfo.textContent = `Claims: ${effectiveRemaining}/${data.dailyClaimLimit || 0} remaining (${pendingCount} pending)`;
+        if (pendingCount > remaining) {
+          claimsInfo.style.color = 'red';
+        } else {
+          claimsInfo.style.color = '#666';
+        }
+      } else {
+        claimsInfo.textContent = `Claims: ${remaining}/${data.dailyClaimLimit || 0} remaining`;
+        claimsInfo.style.color = '#666';
+      }
+    }
+  }
+}
+
+// Check authentication - will be called after DOM loads
+async function checkAuth() {
+  try {
+    const r = await fetch('/auth/me');
+    const data = await r.json();
+    if (!data.authenticated) {
+      showAuthModal();
+    } else {
+      isAuthenticated = true;
+      isAdmin = data.isAdmin || false;
+      userClaimsUsed = data.claimsUsedToday || 0;
+      userClaimLimit = data.dailyClaimLimit || 0;
+      userClaimsRemaining = data.claimsRemaining || 0;
+      updateAdminToolbar();
+      updateClaimsInfo(data);
+      const userInfo = document.getElementById('userInfo');
+      if (userInfo) {
+        userInfo.textContent = `User: ${data.username}${isAdmin ? ' (Admin)' : ''}`;
+      }
+    }
+  } catch {
+    showAuthModal();
+  }
+}
 
 async function fetchJSON() {
   const res = await fetch('ServerSettings.json');
@@ -23,6 +101,9 @@ function loadImage(src) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // Check authentication first
+  await checkAuth();
+  
   try {
     await fetchJSON();
   } catch (err) {
@@ -130,6 +211,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const teamSwatch = document.getElementById('teamSwatch');
   let selectedTeam = null;
 
+  // Declare reloadSavedClaims at scope accessible to all handlers
+  let reloadSavedClaims = async () => {
+    console.warn('reloadSavedClaims called before initialization');
+  };
+
   function updateSwatch(teamName) {
     if (!teamSwatch) return;
     if (teamName === '__EMPTY__') {
@@ -225,6 +311,14 @@ document.addEventListener('DOMContentLoaded', async () => {
       const el = document.getElementById('pendingCount');
       if (!el) return;
       el.textContent = pendingClaims.length ? `Pending: ${pendingClaims.length}` : '';
+      
+      // Update claims info with pending count
+      if (!isAdmin && userClaimLimit > 0) {
+        updateClaimsInfo({
+          claimsRemaining: userClaimsRemaining,
+          dailyClaimLimit: userClaimLimit
+        }, pendingClaims.length);
+      }
     }
 
     // helpers
@@ -374,6 +468,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     function addPendingClaim(imgX, imgY) {
+      // Only warn if trying to add way more than available (prevents abuse)
+      // The actual net cost will be validated at confirmation time
+      if (!isAdmin && userClaimLimit > 0) {
+        const totalWouldBe = pendingClaims.length + 1;
+        // Allow some buffer since they might be replacing their own claims
+        const reasonableLimit = userClaimsRemaining + 50; // Allow up to 50 extra for replacements
+        if (totalWouldBe > reasonableLimit) {
+          alert(`You cannot add that many pending claims. You have ${userClaimsRemaining} claims remaining (plus buffer for replacements).`);
+          return;
+        }
+      }
+      
       const team = selectedTeam || null;
       const color = getSelectedTeamColor();
       const claim = { imgX: Math.round(imgX), imgY: Math.round(imgY), date: new Date().toISOString(), team, color };
@@ -403,7 +509,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       reloadSavedClaims();
     }
 
-    async function reloadSavedClaims() {
+    reloadSavedClaims = async function() {
       const loadingIndicator = document.getElementById('loadingIndicator');
       if (loadingIndicator) loadingIndicator.style.display = 'block';
       
@@ -428,7 +534,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           renderedClaimIds.clear();
           
           claims.forEach(c => {
-            const rgba = hexToRgba(c.color || '#000000', 255);
+            // Override color to purple for filtered claims (admin only)
+            let color = c.color || '#000000';
+            if (isAdmin && filteredClaimIds.has(c.id)) {
+              color = '#800080'; // Purple
+            }
+            const rgba = hexToRgba(color, 255);
             const seedX = Math.round(c.x), seedY = Math.round(c.y);
             let ok = floodFillOverlay(savedCtx, seedX, seedY, rgba);
             if (!ok) {
@@ -464,17 +575,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         const idsToDelete = new Set();
+        let ownClaimsToDelete = 0;
+        
         try {
-          for (const c of existing) {
-            const sx = Math.round(c.x), sy = Math.round(c.y);
-            if (sx < 0 || sy < 0 || sx >= tempOverlay.width || sy >= tempOverlay.height) continue;
-            try {
-              const d = tempCtx.getImageData(sx, sy, 1, 1).data;
-              if (d[3] > 0) idsToDelete.add(c.id);
-            } catch (e) {}
+          // Get current user's ID from session
+          const meResponse = await fetch('/auth/me');
+          let currentUserId = null;
+          if (meResponse.ok) {
+            const meData = await meResponse.json();
+            // We need to match by username since we have that
+            for (const c of existing) {
+              const sx = Math.round(c.x), sy = Math.round(c.y);
+              if (sx < 0 || sy < 0 || sx >= tempOverlay.width || sy >= tempOverlay.height) continue;
+              try {
+                const d = tempCtx.getImageData(sx, sy, 1, 1).data;
+                if (d[3] > 0) {
+                  idsToDelete.add(c.id);
+                  // Check if this is the current user's claim
+                  if (c.player === meData.username) {
+                    ownClaimsToDelete++;
+                  }
+                }
+              } catch (e) {}
+            }
           }
         } catch (e) {
           console.warn('Error while checking overlaps on temp overlay', e);
+        }
+
+        // Calculate net claim cost (new claims - own deleted claims)
+        const nonEmptyClaims = pendingClaims.filter(c => c.team !== '__EMPTY__');
+        const netClaimCost = Math.max(0, nonEmptyClaims.length - ownClaimsToDelete);
+        
+        // Check if net claim cost exceeds limit (unless admin)
+        if (!isAdmin && userClaimLimit > 0 && netClaimCost > userClaimsRemaining) {
+          alert(`Cannot confirm. Net cost is ${netClaimCost} claims (${nonEmptyClaims.length} new - ${ownClaimsToDelete} replaced) but you only have ${userClaimsRemaining} remaining.`);
+          return;
         }
 
         if (idsToDelete.size) {
@@ -484,13 +620,26 @@ document.addEventListener('DOMContentLoaded', async () => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ ids: Array.from(idsToDelete) })
             });
-            if (!delRes.ok) console.warn('Failed to delete overlapping claims', delRes.status);
+            if (!delRes.ok) {
+              console.warn('Failed to delete overlapping claims', delRes.status);
+            } else {
+              // Refresh claim counts if claims were returned
+              const delData = await delRes.json();
+              if (delData.claimsReturned > 0) {
+                const meResponse = await fetch('/auth/me');
+                if (meResponse.ok) {
+                  const meData = await meResponse.json();
+                  userClaimsUsed = meData.claimsUsedToday || 0;
+                  userClaimLimit = meData.dailyClaimLimit || 0;
+                  userClaimsRemaining = meData.claimsRemaining || 0;
+                  updateClaimsInfo(meData);
+                }
+              }
+            }
           } catch (e) {
             console.warn('Failed to delete overlapping claims', e);
           }
         }
-
-        const nonEmptyClaims = pendingClaims.filter(c => c.team !== '__EMPTY__');
 
         if (nonEmptyClaims.length > 0) {
           const res = await fetch('/claims', {
@@ -498,7 +647,26 @@ document.addEventListener('DOMContentLoaded', async () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ claims: nonEmptyClaims })
           });
-          if (!res.ok) throw new Error('Server returned ' + res.status);
+          
+          if (!res.ok) {
+            const errorData = await res.json();
+            if (res.status === 403 && errorData.error.includes('limit')) {
+              alert(`Daily claim limit reached! You have ${errorData.remaining || 0} claims remaining out of ${errorData.limit}.`);
+            } else {
+              throw new Error('Server returned ' + res.status);
+            }
+            return;
+          }
+          
+          // Update claims info after successful submission
+          const meResponse = await fetch('/auth/me');
+          if (meResponse.ok) {
+            const meData = await meResponse.json();
+            userClaimsUsed = meData.claimsUsedToday || 0;
+            userClaimLimit = meData.dailyClaimLimit || 0;
+            userClaimsRemaining = meData.claimsRemaining || 0;
+            updateClaimsInfo(meData);
+          }
         }
 
         resetPendingClaims();
@@ -631,6 +799,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
       } catch (e) {}
     }, 3000);
+    
+    // Listen for manual claim updates (e.g., admin clearing claims)
+    window.addEventListener('claimsUpdated', async () => {
+      await reloadSavedClaims();
+    });
     
   } catch (err) {
     console.error('Failed to load map image', err);
@@ -798,6 +971,370 @@ document.addEventListener('DOMContentLoaded', async () => {
       hasMoved = true;
     }
   });
+
+  // Logout handler
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', async () => {
+      try {
+        await fetch('/auth/logout', { method: 'POST' });
+        isAuthenticated = false;
+        isAdmin = false;
+        updateAdminToolbar();
+        showAuthModal();
+        // Clear user info
+        const userInfo = document.getElementById('userInfo');
+        if (userInfo) {
+          userInfo.textContent = '';
+        }
+      } catch (err) {
+        console.error('Logout failed:', err);
+      }
+    });
+  }
+
+  // Authentication modal logic
+  let isLoginMode = true;
+  const authModal = document.getElementById('authModal');
+  const authForm = document.getElementById('authForm');
+  const authTitle = document.getElementById('authTitle');
+  const authSubmitBtn = document.getElementById('authSubmitBtn');
+  const authToggle = document.getElementById('authToggle');
+  const authError = document.getElementById('authError');
+  const authUsername = document.getElementById('authUsername');
+  const authPassword = document.getElementById('authPassword');
+
+  if (authToggle) {
+    authToggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      isLoginMode = !isLoginMode;
+      if (isLoginMode) {
+        authTitle.textContent = 'Login';
+        authSubmitBtn.textContent = 'Login';
+        authToggle.textContent = 'Need an account? Register';
+      } else {
+        authTitle.textContent = 'Register';
+        authSubmitBtn.textContent = 'Register';
+        authToggle.textContent = 'Already have an account? Login';
+      }
+      authError.style.display = 'none';
+    });
+  }
+
+  if (authForm) {
+    authForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const username = authUsername.value.trim();
+      const password = authPassword.value;
+
+      if (!username || !password) {
+        authError.textContent = 'Please enter username and password';
+        authError.style.display = 'block';
+        return;
+      }
+
+      const endpoint = isLoginMode ? '/auth/login' : '/auth/register';
+      
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          isAuthenticated = true;
+          // Check admin status after login
+          const meResponse = await fetch('/auth/me');
+          const meData = await meResponse.json();
+          isAdmin = meData.isAdmin || false;
+          userClaimsUsed = meData.claimsUsedToday || 0;
+          userClaimLimit = meData.dailyClaimLimit || 0;
+          userClaimsRemaining = meData.claimsRemaining || 0;
+          updateAdminToolbar();
+          updateClaimsInfo(meData);
+          
+          hideAuthModal();
+          const userInfo = document.getElementById('userInfo');
+          if (userInfo) {
+            userInfo.textContent = `User: ${data.username}${isAdmin ? ' (Admin)' : ''}`;
+          }
+          authUsername.value = '';
+          authPassword.value = '';
+          authError.style.display = 'none';
+        } else {
+          authError.textContent = data.error || 'Authentication failed';
+          authError.style.display = 'block';
+        }
+      } catch (err) {
+        console.error('Auth error:', err);
+        authError.textContent = 'Network error. Please try again.';
+        authError.style.display = 'block';
+      }
+    });
+  }
+
+  // Manage Claims Modal functionality
+  const manageClaimsBtn = document.getElementById('manageClaimsBtn');
+  const manageClaimsModal = document.getElementById('manageClaimsModal');
+  const closeManageClaimsBtn = document.getElementById('closeManageClaimsBtn');
+  const usersTableBody = document.getElementById('usersTableBody');
+  const manageClaimsError = document.getElementById('manageClaimsError');
+  const manageClaimsSuccess = document.getElementById('manageClaimsSuccess');
+
+  async function loadUsersTable() {
+    try {
+      manageClaimsError.style.display = 'none';
+      manageClaimsSuccess.style.display = 'none';
+      usersTableBody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:#999;">Loading...</td></tr>';
+      
+      const response = await fetch('/admin/users');
+      
+      if (!response.ok) {
+        let errorMsg = 'Failed to load users';
+        try {
+          const data = await response.json();
+          errorMsg = data.error || errorMsg;
+        } catch (e) {
+          errorMsg = `Server error (${response.status})`;
+        }
+        throw new Error(errorMsg);
+      }
+      
+      const data = await response.json();
+      
+      if (!data.users || data.users.length === 0) {
+        usersTableBody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:#999;">No users found</td></tr>';
+        return;
+      }
+      
+      usersTableBody.innerHTML = '';
+      data.users.forEach(user => {
+        const row = document.createElement('tr');
+        row.style.borderBottom = '1px solid #eee';
+        
+        const status = user.isAdmin ? '<span style="color:#007acc;font-weight:bold;">Admin</span>' : 'User';
+        const remaining = user.isAdmin ? 'Unlimited' : user.claimsRemaining;
+        
+        row.innerHTML = `
+          <td style="padding:10px;">${user.username}</td>
+          <td style="padding:10px;">${status}</td>
+          <td style="padding:10px;text-align:center;">${user.claimsUsedToday}</td>
+          <td style="padding:10px;text-align:center;">
+            ${user.isAdmin ? 'Unlimited' : `<input type="number" min="0" value="${user.dailyClaimLimit}" data-user-id="${user.id}" style="width:60px;padding:4px;text-align:center;" ${user.isAdmin ? 'disabled' : ''}>`}
+          </td>
+          <td style="padding:10px;text-align:center;">
+            ${user.isAdmin ? '-' : `<button class="update-limit-btn" data-user-id="${user.id}" style="padding:4px 12px;background:#007acc;color:white;border:none;border-radius:4px;cursor:pointer;">Update</button>`}
+          </td>
+          <td style="padding:10px;text-align:center;">
+            ${user.claimsUsedToday > 0 ? `<button class="clear-today-btn" data-user-id="${user.id}" data-username="${user.username}" style="padding:4px 12px;background:#d9534f;color:white;border:none;border-radius:4px;cursor:pointer;">Clear (${user.claimsUsedToday})</button>` : '-'}
+          </td>
+        `;
+        
+        usersTableBody.appendChild(row);
+      });
+      
+      // Add event listeners to update buttons
+      document.querySelectorAll('.update-limit-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const userId = e.target.dataset.userId;
+          const input = document.querySelector(`input[data-user-id="${userId}"]`);
+          const newLimit = parseInt(input.value);
+          
+          if (!Number.isInteger(newLimit) || newLimit < 0) {
+            manageClaimsError.textContent = 'Please enter a valid non-negative number';
+            manageClaimsError.style.display = 'block';
+            setTimeout(() => { manageClaimsError.style.display = 'none'; }, 3000);
+            return;
+          }
+          
+          try {
+            const response = await fetch(`/admin/users/${userId}/claim-limit`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ dailyClaimLimit: newLimit })
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+              manageClaimsSuccess.textContent = 'Claim limit updated successfully!';
+              manageClaimsSuccess.style.display = 'block';
+              setTimeout(() => { manageClaimsSuccess.style.display = 'none'; }, 3000);
+            } else {
+              throw new Error(data.error || 'Failed to update');
+            }
+          } catch (err) {
+            manageClaimsError.textContent = err.message;
+            manageClaimsError.style.display = 'block';
+            setTimeout(() => { manageClaimsError.style.display = 'none'; }, 3000);
+          }
+        });
+      });
+      
+      // Add event listeners to clear today buttons
+      document.querySelectorAll('.clear-today-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const userId = e.target.dataset.userId;
+          const username = e.target.dataset.username;
+          
+          if (!confirm(`Clear all claims made by ${username} today? This will refund their claims.`)) {
+            return;
+          }
+          
+          try {
+            const response = await fetch(`/admin/users/${userId}/clear-today`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            
+            const data = await response.json();
+            
+            if (response.ok) {
+              manageClaimsSuccess.textContent = `Cleared ${data.deleted} claim(s) for ${username}. Claims refunded.`;
+              manageClaimsSuccess.style.display = 'block';
+              setTimeout(() => { manageClaimsSuccess.style.display = 'none'; }, 3000);
+              // Reload the table and map
+              loadUsersTable();
+              // Trigger a reload of the map claims
+              const reloadEvent = new Event('claimsUpdated');
+              window.dispatchEvent(reloadEvent);
+            } else {
+              throw new Error(data.error || 'Failed to clear claims');
+            }
+          } catch (err) {
+            manageClaimsError.textContent = err.message;
+            manageClaimsError.style.display = 'block';
+            setTimeout(() => { manageClaimsError.style.display = 'none'; }, 3000);
+          }
+        });
+      });
+    } catch (err) {
+      console.error('Failed to load users:', err);
+      manageClaimsError.textContent = err.message;
+      manageClaimsError.style.display = 'block';
+      usersTableBody.innerHTML = '<tr><td colspan="6" style="padding:20px;text-align:center;color:red;">Failed to load users</td></tr>';
+    }
+  }
+
+  if (manageClaimsBtn) {
+    manageClaimsBtn.addEventListener('click', () => {
+      manageClaimsModal.style.display = 'flex';
+      loadUsersTable();
+    });
+  }
+
+  if (closeManageClaimsBtn) {
+    closeManageClaimsBtn.addEventListener('click', () => {
+      manageClaimsModal.style.display = 'none';
+    });
+  }
+
+  // Filter Claims Modal functionality
+  const filterClaimsBtn = document.getElementById('filterClaimsBtn');
+  const filterClaimsModal = document.getElementById('filterClaimsModal');
+  const closeFilterClaimsBtn = document.getElementById('closeFilterClaimsBtn');
+  const searchClaimsBtn = document.getElementById('searchClaimsBtn');
+  const clearFilterBtn = document.getElementById('clearFilterBtn');
+  const filterPlayer = document.getElementById('filterPlayer');
+  const filterTeam = document.getElementById('filterTeam');
+  const filterDate = document.getElementById('filterDate');
+  const filterClaimsError = document.getElementById('filterClaimsError');
+  const filterClaimsSuccess = document.getElementById('filterClaimsSuccess');
+  const filterResults = document.getElementById('filterResults');
+  const filterResultCount = document.getElementById('filterResultCount');
+  const filterResultsContainer = document.getElementById('filterResultsContainer');
+
+  if (filterClaimsBtn) {
+    filterClaimsBtn.addEventListener('click', () => {
+      filterClaimsModal.style.display = 'flex';
+    });
+  }
+
+  if (closeFilterClaimsBtn) {
+    closeFilterClaimsBtn.addEventListener('click', () => {
+      filterClaimsModal.style.display = 'none';
+    });
+  }
+
+  if (searchClaimsBtn) {
+    searchClaimsBtn.addEventListener('click', async () => {
+      const player = filterPlayer.value.trim();
+      const team = filterTeam.value.trim();
+      const date = filterDate.value.trim();
+
+      if (!player && !team && !date) {
+        filterClaimsError.textContent = 'Please enter at least one search criteria';
+        filterClaimsError.style.display = 'block';
+        setTimeout(() => { filterClaimsError.style.display = 'none'; }, 3000);
+        return;
+      }
+
+      try {
+        filterClaimsError.style.display = 'none';
+        filterClaimsSuccess.style.display = 'none';
+
+        const response = await fetch('/admin/claims/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ player, team, date })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to search claims');
+        }
+
+        // Update filtered claims set
+        filteredClaimIds.clear();
+        data.claims.forEach(c => filteredClaimIds.add(c.id));
+
+        // Display results
+        filterResultCount.textContent = data.count;
+        filterResultsContainer.style.display = 'block';
+
+        if (data.count === 0) {
+          filterResults.innerHTML = '<p style="color:#999;">No claims found</p>';
+        } else {
+          let html = '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+          html += '<tr style="background:#f5f5f5;"><th style="padding:5px;">ID</th><th style="padding:5px;">Player</th><th style="padding:5px;">Team</th><th style="padding:5px;">Date</th></tr>';
+          data.claims.forEach(c => {
+            html += `<tr style="border-bottom:1px solid #eee;"><td style="padding:5px;">${c.id}</td><td style="padding:5px;">${c.player || 'N/A'}</td><td style="padding:5px;">${c.team || 'N/A'}</td><td style="padding:5px;">${c.date.split('T')[0]}</td></tr>`;
+          });
+          html += '</table>';
+          filterResults.innerHTML = html;
+        }
+
+        // Reload map to show purple highlights
+        await reloadSavedClaims();
+
+        filterClaimsSuccess.textContent = `${data.count} claim(s) highlighted in purple`;
+        filterClaimsSuccess.style.display = 'block';
+      } catch (err) {
+        console.error('Failed to search claims:', err);
+        filterClaimsError.textContent = err.message;
+        filterClaimsError.style.display = 'block';
+      }
+    });
+  }
+
+  if (clearFilterBtn) {
+    clearFilterBtn.addEventListener('click', async () => {
+      filterPlayer.value = '';
+      filterTeam.value = '';
+      filterDate.value = '';
+      filteredClaimIds.clear();
+      filterResultsContainer.style.display = 'none';
+      filterClaimsError.style.display = 'none';
+      filterClaimsSuccess.style.display = 'none';
+      
+      // Reload map to remove purple highlights
+      await reloadSavedClaims();
+    });
+  }
 
   draw();
 });

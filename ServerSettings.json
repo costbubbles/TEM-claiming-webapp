@@ -4,5 +4,7 @@
         "Socialists" : {"color": "#ff0000"},
         "Reactionaries" : {"color": "#0000ff"},
         "Liberals" : {"color": "#ffff00"}
-    }
+    },
+    "Admins" : ["admin", "costbubbles"],
+    "defaultDailyClaimLimit" : 10
 }

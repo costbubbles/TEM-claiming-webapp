@@ -16,6 +16,9 @@
 </head>
 <body>
   <div class="toolbar">
+    <span id="userInfo" style="margin-right:16px;font-weight:bold;color:#333;"></span>
+    <span id="claimsInfo" style="margin-right:16px;font-size:14px;color:#666;"></span>
+    <button id="logoutBtn" title="Logout" style="margin-right:16px;">Logout</button>
     <label for="teamSelect">Team:</label>
     <select id="teamSelect" aria-label="Select team"></select>
     <span id="teamSwatch" class="swatch" aria-hidden="true"></span>
@@ -25,13 +28,101 @@
     <span id="pendingCount" style="margin-left:8px;font-size:12px;color:#333"></span>
   </div>
 
-  <div class="toolbar-bottom-right">
+  <div class="toolbar-bottom-right" style="display:none;">
+    <button id="filterClaimsBtn" title="Filter and highlight claims">Filter Claims</button>
+    <button id="manageClaimsBtn" title="Manage user claim limits">Manage Claims</button>
     <button id="uploadMapBtn" title="Upload new map PNG">Upload Map</button>
     <button id="clearDbBtn" title="Clear database (debug)">Clear DB</button>
   </div>
 
-  <div id="loadingIndicator" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.8);color:white;padding:20px 40px;border-radius:8px;font-size:18px;z-index:1000;display:none;">
+  <div id="loadingIndicator" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.8);color:white;padding:20px 40px;border-radius:8px;font-size:18px;z-index:9999;display:none;">
     Updating Claims...
+  </div>
+
+  <!-- Login/Register Modal -->
+  <div id="authModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:2000;justify-content:center;align-items:center;">
+    <div style="background:white;padding:30px;border-radius:8px;width:300px;box-shadow:0 4px 6px rgba(0,0,0,0.3);">
+      <h2 id="authTitle" style="margin-top:0;text-align:center;">Login</h2>
+      <div id="authError" style="color:red;font-size:14px;margin-bottom:10px;display:none;"></div>
+      <form id="authForm">
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:bold;">Username:</label>
+          <input type="text" id="authUsername" required style="width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;">
+        </div>
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:bold;">Password:</label>
+          <input type="password" id="authPassword" required style="width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;">
+        </div>
+        <button type="submit" id="authSubmitBtn" style="width:100%;padding:10px;background:#007acc;color:white;border:none;border-radius:4px;font-size:16px;cursor:pointer;margin-bottom:10px;">Login</button>
+      </form>
+      <div style="text-align:center;font-size:14px;">
+        <a href="#" id="authToggle" style="color:#007acc;text-decoration:none;">Need an account? Register</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter Claims Modal -->
+  <div id="filterClaimsModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:2000;justify-content:center;align-items:center;">
+    <div style="background:white;padding:30px;border-radius:8px;width:700px;max-height:80vh;overflow-y:auto;box-shadow:0 4px 6px rgba(0,0,0,0.3);">
+      <h2 style="margin-top:0;">Filter Claims (Highlight Purple)</h2>
+      <p style="font-size:14px;color:#666;margin-bottom:20px;">Search for claims by player, team, or date. Matching claims will be highlighted in purple on the map.</p>
+      <div id="filterClaimsError" style="color:red;font-size:14px;margin-bottom:10px;display:none;"></div>
+      <div id="filterClaimsSuccess" style="color:green;font-size:14px;margin-bottom:10px;display:none;"></div>
+      
+      <div style="margin-bottom:20px;">
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:bold;">Player Username:</label>
+          <input type="text" id="filterPlayer" placeholder="e.g. admin" style="width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;">
+        </div>
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:bold;">Team:</label>
+          <input type="text" id="filterTeam" placeholder="e.g. Socialists" style="width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;">
+        </div>
+        <div style="margin-bottom:15px;">
+          <label style="display:block;margin-bottom:5px;font-weight:bold;">Date (YYYY-MM-DD):</label>
+          <input type="text" id="filterDate" placeholder="e.g. 2025-12-23" style="width:100%;padding:8px;box-sizing:border-box;border:1px solid #ccc;border-radius:4px;">
+        </div>
+        <button id="searchClaimsBtn" style="width:100%;padding:10px;background:#007acc;color:white;border:none;border-radius:4px;font-size:16px;cursor:pointer;margin-bottom:10px;">Search & Highlight</button>
+        <button id="clearFilterBtn" style="width:100%;padding:10px;background:#6c757d;color:white;border:none;border-radius:4px;font-size:16px;cursor:pointer;">Clear Filter</button>
+      </div>
+      
+      <div id="filterResultsContainer" style="display:none;">
+        <h3 style="margin-top:20px;">Results: <span id="filterResultCount">0</span> claims found</h3>
+        <div id="filterResults" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;padding:10px;border-radius:4px;font-size:12px;"></div>
+      </div>
+      
+      <div style="margin-top:20px;text-align:right;">
+        <button id="closeFilterClaimsBtn" style="padding:10px 20px;background:#666;color:white;border:none;border-radius:4px;cursor:pointer;">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Manage Claims Modal -->
+  <div id="manageClaimsModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:2000;justify-content:center;align-items:center;">
+    <div style="background:white;padding:30px;border-radius:8px;width:600px;max-height:80vh;overflow-y:auto;box-shadow:0 4px 6px rgba(0,0,0,0.3);">
+      <h2 style="margin-top:0;">Manage User Claim Limits</h2>
+      <p style="font-size:14px;color:#666;margin-bottom:20px;">Set daily claim limits for each user. Admins always have unlimited claims.</p>
+      <div id="manageClaimsError" style="color:red;font-size:14px;margin-bottom:10px;display:none;"></div>
+      <div id="manageClaimsSuccess" style="color:green;font-size:14px;margin-bottom:10px;display:none;"></div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f5f5f5;">
+            <th style="padding:10px;text-align:left;border-bottom:2px solid #ddd;">Username</th>
+            <th style="padding:10px;text-align:left;border-bottom:2px solid #ddd;">Status</th>
+            <th style="padding:10px;text-align:center;border-bottom:2px solid #ddd;">Used Today</th>
+            <th style="padding:10px;text-align:center;border-bottom:2px solid #ddd;">Daily Limit</th>
+            <th style="padding:10px;text-align:center;border-bottom:2px solid #ddd;">Update Limit</th>
+            <th style="padding:10px;text-align:center;border-bottom:2px solid #ddd;">Clear Today</th>
+          </tr>
+        </thead>
+        <tbody id="usersTableBody">
+          <tr><td colspan="6" style="padding:20px;text-align:center;color:#999;">Loading...</td></tr>
+        </tbody>
+      </table>
+      <div style="margin-top:20px;text-align:right;">
+        <button id="closeManageClaimsBtn" style="padding:10px 20px;background:#666;color:white;border:none;border-radius:4px;cursor:pointer;">Close</button>
+      </div>
+    </div>
   </div>
 
   <div class="canvas-container">
