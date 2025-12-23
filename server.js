@@ -9,15 +9,31 @@ const dbFile = process.env.DB_PATH || path.join(__dirname, 'mapdata.db');
 
 // Ensure the directory exists for the database file
 const dbDir = path.dirname(dbFile);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-  console.log('Created database directory:', dbDir);
+console.log('Database file path:', dbFile);
+console.log('Database directory:', dbDir);
+
+try {
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+    console.log('Created database directory:', dbDir);
+  }
+  
+  // Test if directory is writable
+  fs.accessSync(dbDir, fs.constants.W_OK);
+  console.log('Database directory is writable');
+} catch (err) {
+  console.error('Cannot write to database directory:', dbDir, err);
+  console.error('Please ensure the directory exists and has write permissions');
+  process.exit(1);
 }
 
 // open (or create) the DB
 const db = new sqlite3.Database(dbFile, (err) => {
   if (err) {
     console.error('Failed to open DB', err);
+    console.error('DB file path:', dbFile);
+    console.error('Current working directory:', process.cwd());
+    console.error('__dirname:', __dirname);
     process.exit(1);
   }
   console.log('Opened DB', dbFile);
