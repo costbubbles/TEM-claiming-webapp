@@ -770,9 +770,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     canvas.style.cursor = 'default';
   });
 
-  // basic touch support (pan + tap)
+  // Touch support with pinch-to-zoom
+  let touchStartDist = 0;
+  let touchStartScale = 1;
+
   canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
+      // Single touch - pan
       const t = e.touches[0];
       isDragging = true;
       dragStartX = t.clientX;
@@ -780,31 +784,87 @@ document.addEventListener('DOMContentLoaded', async () => {
       startPanX = panX;
       startPanY = panY;
       hasMoved = false;
+    } else if (e.touches.length === 2) {
+      // Two fingers - zoom
+      e.preventDefault();
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      touchStartDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      touchStartScale = scale;
+      
+      // Store center point for zoom
+      dragStartX = (t0.clientX + t1.clientX) / 2;
+      dragStartY = (t0.clientY + t1.clientY) / 2;
+      hasMoved = true; // Prevent click event
     }
-  }, { passive: true });
+  }, { passive: false });
 
   canvas.addEventListener('touchmove', (e) => {
-    if (!isDragging || e.touches.length !== 1) return;
-    const t = e.touches[0];
-    const dx = t.clientX - dragStartX;
-    const dy = t.clientY - dragStartY;
-    if (Math.hypot(dx, dy) > MOVE_THRESHOLD) hasMoved = true;
-    if (hasMoved) {
-      panX = startPanX + dx;
-      panY = startPanY + dy;
+    if (e.touches.length === 1 && isDragging) {
+      // Single touch panning
+      const t = e.touches[0];
+      const dx = t.clientX - dragStartX;
+      const dy = t.clientY - dragStartY;
+      if (Math.hypot(dx, dy) > MOVE_THRESHOLD) hasMoved = true;
+      if (hasMoved) {
+        panX = startPanX + dx;
+        panY = startPanY + dy;
+        draw();
+      }
+    } else if (e.touches.length === 2) {
+      // Pinch zoom
+      e.preventDefault();
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      
+      const currentDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      const currentCenter = {
+        x: (t0.clientX + t1.clientX) / 2,
+        y: (t0.clientY + t1.clientY) / 2
+      };
+      
+      // Calculate new scale
+      const scaleFactor = currentDist / touchStartDist;
+      let newScale = touchStartScale * scaleFactor;
+      newScale = Math.max(minScale, Math.min(maxScale, newScale));
+      
+      // Zoom centered on pinch point
+      const rect = canvas.getBoundingClientRect();
+      const centerX = currentCenter.x - rect.left;
+      const centerY = currentCenter.y - rect.top;
+      
+      const oldImgX = (centerX - panX) / scale;
+      const oldImgY = (centerY - panY) / scale;
+      
+      panX = centerX - oldImgX * newScale;
+      panY = centerY - oldImgY * newScale;
+      scale = newScale;
+      
       draw();
     }
-  }, { passive: true });
+  }, { passive: false });
 
   canvas.addEventListener('touchend', (e) => {
-    if (!isDragging) return;
-    if (!hasMoved) {
-      const t = e.changedTouches[0];
-      const { imgX, imgY } = screenToImage(t.clientX, t.clientY);
-      if (typeof claimRegion === 'function') claimRegion(imgX, imgY);
+    if (e.touches.length === 0) {
+      // All touches ended
+      if (!hasMoved && isDragging) {
+        const t = e.changedTouches[0];
+        const { imgX, imgY } = screenToImage(t.clientX, t.clientY);
+        if (typeof claimRegion === 'function') claimRegion(imgX, imgY);
+      }
+      isDragging = false;
+      hasMoved = false;
+      touchStartDist = 0;
+    } else if (e.touches.length === 1) {
+      // One finger lifted, restart single touch
+      const t = e.touches[0];
+      isDragging = true;
+      dragStartX = t.clientX;
+      dragStartY = t.clientY;
+      startPanX = panX;
+      startPanY = panY;
+      hasMoved = true; // Prevent accidental click after pinch
     }
-    isDragging = false;
-    hasMoved = false;
   });
 
   draw();
