@@ -55,6 +55,53 @@ function updateClaimsInfo(data, pendingCount = 0) {
   }
 }
 
+// Countdown timer to next day
+let countdownInterval = null;
+let serverTimeOffset = 0; // Difference between server time and client time in milliseconds
+
+function updateCountdownTimer() {
+  const timerElement = document.getElementById('countdownTimer');
+  if (!timerElement) return;
+  
+  // Use server time by adding the offset to client time
+  const now = new Date(Date.now() + serverTimeOffset);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(0, 0, 0, 0);
+  
+  const diff = tomorrow - now;
+  
+  if (diff <= 0) {
+    timerElement.textContent = 'Resets in: 0h 0m 0s';
+    return;
+  }
+  
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+  
+  timerElement.textContent = `Resets in: ${hours}h ${minutes}m ${seconds}s`;
+}
+
+function startCountdownTimer() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+  }
+  updateCountdownTimer();
+  countdownInterval = setInterval(updateCountdownTimer, 1000);
+}
+
+function stopCountdownTimer() {
+  if (countdownInterval) {
+    clearInterval(countdownInterval);
+    countdownInterval = null;
+  }
+  const timerElement = document.getElementById('countdownTimer');
+  if (timerElement) {
+    timerElement.textContent = '';
+  }
+}
+
 // Check authentication - will be called after DOM loads
 async function checkAuth() {
   try {
@@ -62,14 +109,22 @@ async function checkAuth() {
     const data = await r.json();
     if (!data.authenticated) {
       showAuthModal();
+      stopCountdownTimer();
     } else {
       isAuthenticated = true;
       isAdmin = data.isAdmin || false;
       userClaimsUsed = data.claimsUsedToday || 0;
       userClaimLimit = data.dailyClaimLimit || 0;
       userClaimsRemaining = data.claimsRemaining || 0;
+      // Calculate time offset between server and client
+      if (data.serverTime) {
+        const serverTime = new Date(data.serverTime);
+        const clientTime = new Date();
+        serverTimeOffset = serverTime - clientTime;
+      }
       updateAdminToolbar();
       updateClaimsInfo(data);
+      startCountdownTimer();
       const userInfo = document.getElementById('userInfo');
       if (userInfo) {
         userInfo.textContent = `User: ${data.username}${isAdmin ? ' (Admin)' : ''}`;
@@ -77,6 +132,7 @@ async function checkAuth() {
     }
   } catch {
     showAuthModal();
+    stopCountdownTimer();
   }
 }
 
@@ -714,9 +770,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const uploadMapBtn = document.getElementById('uploadMapBtn');
     if (uploadMapBtn) uploadMapBtn.addEventListener('click', async () => {
-      const password = prompt('Enter password to upload map:');
-      if (!password) return;
-      
       const input = document.createElement('input');
       input.type = 'file';
       input.accept = 'image/png';
@@ -726,7 +779,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         
         const formData = new FormData();
         formData.append('mapImage', file);
-        formData.append('password', password);
         
         try {
           const res = await fetch('/upload-map', {
@@ -751,13 +803,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     if (clearDbBtn) clearDbBtn.addEventListener('click', async () => {
       if (!confirm('Clear all saved claims from the database? This cannot be undone.')) return;
-      const password = prompt('Enter password to clear database:');
-      if (!password) return;
       try {
         const res = await fetch('/claims', { 
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ password })
+          headers: { 'Content-Type': 'application/json' }
         });
         if (!res.ok) {
           const body = await res.json();
@@ -981,6 +1030,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         isAuthenticated = false;
         isAdmin = false;
         updateAdminToolbar();
+        stopCountdownTimer();
         showAuthModal();
         // Clear user info
         const userInfo = document.getElementById('userInfo');

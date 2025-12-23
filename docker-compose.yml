@@ -4,7 +4,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - mapdata:/app/data
+      - ./data:/app/data
       - ./ServerSettings.json:/app/ServerSettings.json:ro
       - ./resources:/app/resources:ro
     environment:
@@ -12,6 +12,3 @@ services:
       - PORT=3000
       - DB_PATH=/app/data/mapdata.db
     restart: unless-stopped
-
-volumes:
-  mapdata:

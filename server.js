@@ -12,6 +12,15 @@ const app = express();
 const port = process.env.PORT || 3000;
 const dbFile = process.env.DB_PATH || path.join(__dirname, 'mapdata.db');
 
+// Helper function to get today's date in server's local timezone (YYYY-MM-DD format)
+function getServerLocalDate() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 // Load server settings for admin list
 let serverSettings = { Admins: [] };
 try {
@@ -250,7 +259,7 @@ app.get('/auth/me', (req, res) => {
           });
         }
         
-        const today = new Date().toISOString().split('T')[0];
+        const today = getServerLocalDate();
         let claimsUsed = user?.claims_used_today || 0;
         const lastClaimDate = user?.last_claim_date;
         
@@ -261,13 +270,16 @@ app.get('/auth/me', (req, res) => {
         
         const limit = user?.daily_claim_limit || serverSettings.defaultDailyClaimLimit || 10;
         
+        const serverTime = new Date();
         return res.json({ 
           authenticated: true, 
           username: req.session.username,
           isAdmin: isAdmin,
           claimsUsedToday: claimsUsed,
           dailyClaimLimit: isAdmin ? -1 : limit, // -1 means unlimited for admins
-          claimsRemaining: isAdmin ? -1 : Math.max(0, limit - claimsUsed)
+          claimsRemaining: isAdmin ? -1 : Math.max(0, limit - claimsUsed),
+          serverTime: serverTime.toISOString(),
+          serverTimezoneOffset: serverTime.getTimezoneOffset()
         });
       }
     );
@@ -278,7 +290,7 @@ app.get('/auth/me', (req, res) => {
 
 // Helper function to check and update claim usage
 function checkAndUpdateClaimUsage(userId, claimCount, callback) {
-  const today = new Date().toISOString().split('T')[0];
+  const today = getServerLocalDate();
   
   db.get(
     'SELECT username, daily_claim_limit, claims_used_today, last_claim_date FROM users WHERE id = ?',
@@ -381,11 +393,6 @@ app.post('/claims', requireAuth, (req, res) => {
 
 // API: clear all claims (admin only)
 app.delete('/claims', requireAdmin, (req, res) => {
-  const { password } = req.body || {};
-  if (password !== 'password') {
-    return res.status(401).json({ error: 'Invalid password' });
-  }
-  
   db.run('DELETE FROM claims', function(err) {
     if (err) {
       console.error('Failed to clear claims', err);
@@ -407,7 +414,7 @@ app.get('/admin/users', requireAdmin, (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch users' });
       }
       
-      const today = new Date().toISOString().split('T')[0];
+      const today = getServerLocalDate();
       const defaultLimit = serverSettings.defaultDailyClaimLimit || 10;
       
       const usersWithInfo = users.map(u => {
@@ -474,7 +481,7 @@ app.post('/admin/users/:userId/clear-today', requireAdmin, (req, res) => {
     return res.status(400).json({ error: 'Invalid user ID' });
   }
   
-  const today = new Date().toISOString().split('T')[0];
+  const today = getServerLocalDate();
   
   // Get user info first
   db.get(
@@ -590,7 +597,7 @@ app.post('/claims/delete', requireAuth, (req, res) => {
   if (clean.length === 0) return res.status(400).json({ error: 'No valid ids provided' });
 
   const isAdmin = serverSettings.Admins && serverSettings.Admins.includes(req.session.username);
-  const today = new Date().toISOString().split('T')[0];
+  const today = getServerLocalDate();
 
   // First, verify ownership and get claim info
   db.all(
@@ -692,12 +699,6 @@ app.post('/claims/delete', requireAuth, (req, res) => {
 
 // API: upload map PNG (admin only)
 app.post('/upload-map', requireAdmin, upload.single('mapImage'), async (req, res) => {
-  const { password } = req.body || {};
-  if (password !== 'password') {
-    if (req.file) fs.unlinkSync(req.file.path); // clean up uploaded file
-    return res.status(401).json({ error: 'Invalid password' });
-  }
-  
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded' });
   }
