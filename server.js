@@ -9,34 +9,25 @@ const dbFile = process.env.DB_PATH || path.join(__dirname, 'mapdata.db');
 
 // Ensure the directory exists for the database file
 const dbDir = path.dirname(dbFile);
-console.log('Database file path:', dbFile);
-console.log('Database directory:', dbDir);
 
 try {
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
-    console.log('Created database directory:', dbDir);
   }
-  
-  // Test if directory is writable
   fs.accessSync(dbDir, fs.constants.W_OK);
-  console.log('Database directory is writable');
+  console.log('Database directory ready:', dbDir);
 } catch (err) {
   console.error('Cannot write to database directory:', dbDir, err);
   console.error('Please ensure the directory exists and has write permissions');
   process.exit(1);
 }
 
-// open (or create) the DB
 const db = new sqlite3.Database(dbFile, (err) => {
   if (err) {
-    console.error('Failed to open DB', err);
-    console.error('DB file path:', dbFile);
-    console.error('Current working directory:', process.cwd());
-    console.error('__dirname:', __dirname);
+    console.error('Failed to open database:', dbFile, err);
     process.exit(1);
   }
-  console.log('Opened DB', dbFile);
+  console.log('Database opened:', dbFile);
 });
 
 // ensure table exists and perform lightweight migrations if necessary
@@ -50,18 +41,12 @@ db.serialize(() => {
     color TEXT
   )`);
 
-  // check whether the 'color' column exists; if not, add it (handles older DBs)
   db.all(`PRAGMA table_info(claims)`, (err, cols) => {
-    if (err) {
-      console.error('Failed to read table info for migrations', err);
-      return;
-    }
+    if (err) return;
     const names = cols.map(c => c.name);
     if (!names.includes('color')) {
-      console.log("Migrating DB: adding 'color' column to claims table");
       db.run(`ALTER TABLE claims ADD COLUMN color TEXT`, (err2) => {
-        if (err2) console.error('Failed to add color column', err2);
-        else console.log("Added 'color' column to claims table");
+        if (!err2) console.log('Added color column to database');
       });
     }
   });
@@ -105,14 +90,11 @@ app.delete('/claims', (req, res) => {
                       clientIp === 'localhost';
   
   if (!isLocalhost) {
-    console.log('Unauthorized clear DB attempt from:', clientIp);
     return res.status(403).json({ error: 'Forbidden: Only host can clear database' });
   }
   
-  // Check password
   const { password } = req.body || {};
   if (password !== 'password') {
-    console.log('Invalid password for clear DB from:', clientIp);
     return res.status(401).json({ error: 'Invalid password' });
   }
   
@@ -121,19 +103,16 @@ app.delete('/claims', (req, res) => {
       console.error('Failed to clear claims', err);
       return res.status(500).json({ error: 'DB delete failed' });
     }
-    // optionally run VACUUM to shrink DB
     db.run('VACUUM', (vErr) => {
-      if (vErr) console.error('VACUUM failed', vErr);
       res.json({ ok: true, deleted: this.changes || 0 });
     });
   });
 });
 
-// API: delete specific claims by id (bulk)
 app.post('/claims/delete', (req, res) => {
   const ids = req.body && req.body.ids;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'No ids provided' });
-  // sanitize IDs to integers
+  
   const clean = ids.map(i => parseInt(i)).filter(n => Number.isInteger(n));
   if (clean.length === 0) return res.status(400).json({ error: 'No valid ids provided' });
 

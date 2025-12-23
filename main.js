@@ -1,5 +1,4 @@
-// main.js
-// Pan/zoom canvas + click-vs-drag detection, loads ServerSettings.json -> settings.mapImage
+  // Pan/zoom canvas with click-vs-drag detection
 
 let settings = {};
 
@@ -13,12 +12,8 @@ async function fetchJSON() {
 function loadImage(src) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.crossOrigin = 'anonymous'; // helps with CORS and pixel access
-    console.log('Starting image load:', src);
-    img.onload = () => {
-      console.log('Image loaded:', src, 'size=', img.width, 'x', img.height);
-      resolve(img);
-    };
+    img.crossOrigin = 'anonymous';
+    img.onload = () => resolve(img);
     img.onerror = (e) => {
       console.error('Image load error for', src, e);
       reject(new Error('Image load error: ' + src));
@@ -48,7 +43,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let panX = 0, panY = 0;
   let scale = 1;
   let dpr = window.devicePixelRatio || 1;
-  const minScale = 0.1, maxScale = 10;
+  const minScale = 0.1, maxScale = 50;
 
   // temporary pending claims (accessible to draw)
   const pendingClaims = [];
@@ -75,7 +70,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     ctx.imageSmoothingEnabled = false;
     try { ctx.imageSmoothingQuality = 'low'; } catch (e) {}
 
-    // Calculate dest rect once to ensure base image and overlays use identical coordinates
+    // Calculate dest rect - ensure pixel alignment by rounding coordinates
     const destX = Math.round(panX * dpr);
     const destY = Math.round(panY * dpr);
     const destW = Math.round(img.width * scale * dpr);
@@ -83,6 +78,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // draw overlays FIRST (behind the base image) using identical dest rect for pixel-perfect alignment
     try {
+      ctx.setTransform(1,0,0,1,0,0);
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
       if (typeof savedOverlay !== 'undefined') ctx.drawImage(savedOverlay, 0, 0, img.width, img.height, destX, destY, destW, destH);
@@ -92,17 +88,16 @@ document.addEventListener('DOMContentLoaded', async () => {
       overlayComposites.forEach(o => {
         try {
           const sx = o.minX, sy = o.minY, sw = o.canvas.width, sh = o.canvas.height;
-          const dx = Math.round(sx * dpr * scale + panX * dpr);
-          const dy = Math.round(sy * dpr * scale + panY * dpr);
-          const dw = Math.round(sw * dpr * scale);
-          const dh = Math.round(sh * dpr * scale);
+          const dx = sx * scale * dpr + destX;
+          const dy = sy * scale * dpr + destY;
+          const dw = sw * scale * dpr;
+          const dh = sh * scale * dpr;
           ctx.drawImage(o.canvas, 0, 0, sw, sh, dx, dy, dw, dh);
         } catch (e) {
           /* ignore */
         }
       });
-      // Note: overlayComposites will be cleared when overlays are reloaded or cleared explicitly
-      // No limit on overlayComposites to allow unlimited claims
+      // Note: overlayComposites cleared when overlays are reloaded
     } finally {
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
@@ -113,47 +108,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     ctx.drawImage(img, 0, 0, img.width, img.height, destX, destY, destW, destH);
 
     // helper to map image coords to canvas pixels
-    function imgToCanvasX(x) { return Math.round(x * dpr * scale + panX * dpr); }
-    function imgToCanvasY(y) { return Math.round(y * dpr * scale + panY * dpr); }
-
-    // draw pending claim markers on top (still useful as quick visual)
-    if (pendingClaims && pendingClaims.length) {
-      pendingClaims.forEach(c => {
-        const markerSize = Math.max(4, Math.round(8 * dpr * scale)); // in canvas pixels
-        const cx = imgToCanvasX(c.imgX);
-        const cy = imgToCanvasY(c.imgY);
-        ctx.fillStyle = c.color || 'rgba(0,255,0,0.8)';
-        ctx.fillRect(cx - markerSize/2, cy - markerSize/2, markerSize, markerSize);
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = Math.max(1, Math.round(1 * dpr));
-        ctx.strokeRect(cx - markerSize/2, cy - markerSize/2, markerSize, markerSize);
-      });
-    }
-
-    // DEBUG: draw overlay thumbnails in the top-left so we can inspect overlay pixels visually
-    try {
-      const thumbW = Math.min(200, savedOverlay ? savedOverlay.width : 0);
-      const thumbH = Math.min(200, savedOverlay ? savedOverlay.height : 0);
-      if (savedOverlay && thumbW && thumbH) {
-        ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
-        ctx.drawImage(savedOverlay, 0, 0, thumbW, thumbH, 8, 8, thumbW, thumbH);
-        ctx.strokeRect(8,8,thumbW,thumbH);
-        ctx.fillStyle = '#000'; ctx.fillRect(8, 8+thumbH, thumbW, 16);
-        ctx.fillStyle = '#fff'; ctx.font = '12px sans-serif'; ctx.fillText('saved', 12, 8+thumbH+12);
-      }
-      if (tempOverlay) {
-        const thumbW2 = Math.min(200, tempOverlay.width);
-        const thumbH2 = Math.min(200, tempOverlay.height);
-        ctx.drawImage(tempOverlay, 0, 0, thumbW2, thumbH2, 16+thumbW, 8, thumbW2, thumbH2);
-        ctx.strokeRect(16+thumbW,8,thumbW2,thumbH2);
-        ctx.fillStyle = '#000'; ctx.fillRect(16+thumbW, 8+thumbH2, thumbW2, 16);
-        ctx.fillStyle = '#fff'; ctx.fillText('temp', 20+thumbW, 8+thumbH2+12);
-      }
-    } catch (e) {
-      /* ignore */
-    }
-
-    // debug bounding boxes removed
+    function imgToCanvasX(x) { return x * dpr * scale + panX * dpr; }
+    function imgToCanvasY(y) { return y * dpr * scale + panY * dpr; }
 
     // reset transform
     ctx.setTransform(1,0,0,1,0,0);
@@ -162,8 +118,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   function resizeCanvas() {
     dpr = window.devicePixelRatio || 1;
     // Size the backing store in device pixels so rendering stays sharp on high-DPI displays
-    canvas.width = Math.round(canvas.clientWidth * dpr);
-    canvas.height = Math.round(canvas.clientHeight * dpr);
+    canvas.width = Math.ceil(canvas.clientWidth * dpr);
+    canvas.height = Math.ceil(canvas.clientHeight * dpr);
     draw(); // safe — draw checks for img and will return if not loaded yet
   }
   window.addEventListener('resize', resizeCanvas);
@@ -207,7 +163,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     teamSelect.addEventListener('change', (e) => {
       selectedTeam = e.target.value;
       updateSwatch(selectedTeam);
-      console.log('Selected team:', selectedTeam, 'color=', getSelectedTeamColor());
     });
   } else {
     if (teamSelect) teamSelect.style.display = 'none';
@@ -263,10 +218,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     const tempCtx = tempOverlay.getContext('2d');
     tempCtx.imageSmoothingEnabled = false;
 
-    // debug markers when we had to pick a nearby seed (for visibility)
-    // (uses outer `debugSeeds` array defined in state)
-    // pending claims storage
-    const pendingClaims = []; // {imgX, imgY, date, team, color}
+    // Cache claim IDs to avoid redundant flood fills
+    const renderedClaimIds = new Set();
 
     function updatePendingCount() {
       const el = document.getElementById('pendingCount');
@@ -436,21 +389,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
       
       overlayCtx.putImageData(imgData, 0, 0);
-      // sample a pixel at seed to confirm overlay contains color
-      try {
-        const probe = overlayCtx.getImageData(sx, sy, 1, 1).data;
-        console.log('floodFillOverlay: overlay sample at seed RGBA=', probe[0], probe[1], probe[2], probe[3]);
-      } catch (e) {
-        console.warn('floodFillOverlay: could not sample overlay pixel (tainted?)', e);
-      }
-
-      // no bounding box drawing — rely on overlay mask for fill visibility
-      console.log('floodFillOverlay: filled', filledCount, 'pixels at seed', sx, sy, 'bbox', minX, minY, maxX, maxY);
 
       // create a small transient canvas for the filled region and store it so draw() can composite it visibly
       try {
-        const regionW = Math.max(1, maxX - minX);
-        const regionH = Math.max(1, maxY - minY);
+        const regionW = Math.max(1, maxX - minX + 1);
+        const regionH = Math.max(1, maxY - minY + 1);
         const tempCanvas = document.createElement('canvas');
         tempCanvas.width = regionW;
         tempCanvas.height = regionH;
@@ -460,7 +403,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         const regionData = overlayCtx.getImageData(minX, minY, regionW, regionH);
         tempC.putImageData(regionData, 0, 0);
         overlayComposites.push({ canvas: tempCanvas, minX, minY, maxX, maxY });
-        // No limit on overlayComposites to allow unlimited claims
       } catch (e) {
         console.warn('Could not create overlay composite', e);
       }
@@ -473,18 +415,12 @@ document.addEventListener('DOMContentLoaded', async () => {
       const color = getSelectedTeamColor();
       const claim = { imgX: Math.round(imgX), imgY: Math.round(imgY), date: new Date().toISOString(), team, color };
       pendingClaims.push(claim);
-      console.log('Added pending claim', claim);
-      // apply temporary fill with team color at 50% opacity
+      
       const fillColor = hexToRgba(color || '#cccccc', 128);
       let ok = floodFillOverlay(tempCtx, claim.imgX, claim.imgY, fillColor);
       if (!ok) {
-        console.log('Flood fill failed for pending claim at', claim.imgX, claim.imgY, '- sampled:', sampleBaseRGBA(claim.imgX, claim.imgY));
         const found = findNearestWhitePixel(claim.imgX, claim.imgY, 20);
-        if (found) {
-          console.log('Found nearby white pixel for pending claim at', found.x, found.y, ' — using that seed');
-          ok = floodFillOverlay(tempCtx, found.x, found.y, fillColor);
-        }
-        if (!ok) console.log('Pending claim flood-fill still failed at', claim.imgX, claim.imgY);
+        if (found) ok = floodFillOverlay(tempCtx, found.x, found.y, fillColor);
       }
       updatePendingCount();
       draw();
@@ -492,11 +428,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     function resetPendingClaims() {
       pendingClaims.length = 0;
-      if (tempCtx) tempCtx.clearRect(0,0,tempOverlay.width,tempOverlay.height);
-      // clear and rebuild overlayComposites from saved claims only
+      if (tempCtx) tempCtx.clearRect(0, 0, tempOverlay.width, tempOverlay.height);
+      
+      // Clear all composites and force rebuild of saved claims only
       overlayComposites.length = 0;
+      renderedClaimIds.clear();
+      
       updatePendingCount();
-      reloadSavedClaims(); // rebuild saved overlayComposites
+      
+      // Rebuild saved claim composites
+      reloadSavedClaims();
     }
 
     async function reloadSavedClaims() {
@@ -508,32 +449,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!res.ok) throw new Error('Failed to fetch claims: ' + res.status);
         const body = await res.json();
         const claims = body.claims || [];
-        // Update lastClaimCount if it exists in outer scope
         if (typeof lastClaimCount !== 'undefined') lastClaimCount = claims.length;
-        // clear saved overlay
-        savedCtx.clearRect(0,0,savedOverlay.width,savedOverlay.height);
-        overlayComposites.length = 0;
-        debugSeeds.length = 0;
-        // apply each saved claim
-        claims.forEach(c => {
-          const rgba = hexToRgba(c.color || '#000000', 255);
-          const seedX = Math.round(c.x), seedY = Math.round(c.y);
-          let ok = floodFillOverlay(savedCtx, seedX, seedY, rgba);
-                  if (!ok) {
-            // try to find nearby white pixel and retry
-            console.log('Saved claim flood-fill failed at', seedX, seedY, '- sampling base pixel:', sampleBaseRGBA(seedX, seedY));
-            const found = findNearestWhitePixel(seedX, seedY, 80);
-            if (found) {
-              console.log('Found nearby white pixel for saved claim at', found.x, found.y, ' — retrying fill');
-              // store debug marker to show where we seeded
-              debugSeeds.push({ x: found.x, y: found.y, color: '#f0f' });
-              // No limit on debugSeeds to allow unlimited claims
-              ok = floodFillOverlay(savedCtx, found.x, found.y, rgba);
-              if (ok) console.log('Saved claim filled at nearby seed', found.x, found.y);
+        
+        // Build set of current claim IDs
+        const currentIds = new Set(claims.map(c => c.id));
+        
+        // Only clear and redraw if claims have changed
+        const idsChanged = currentIds.size !== renderedClaimIds.size || 
+                          ![...currentIds].every(id => renderedClaimIds.has(id));
+        
+        if (idsChanged) {
+          savedCtx.clearRect(0, 0, savedOverlay.width, savedOverlay.height);
+          overlayComposites.length = 0;
+          debugSeeds.length = 0;
+          renderedClaimIds.clear();
+          
+          claims.forEach(c => {
+            const rgba = hexToRgba(c.color || '#000000', 255);
+            const seedX = Math.round(c.x), seedY = Math.round(c.y);
+            let ok = floodFillOverlay(savedCtx, seedX, seedY, rgba);
+            if (!ok) {
+              const found = findNearestWhitePixel(seedX, seedY, 80);
+              if (found) ok = floodFillOverlay(savedCtx, found.x, found.y, rgba);
             }
-            if (!ok) console.log('Saved claim flood-fill still failed at', seedX, seedY);
-          }
-        });
+            if (ok) renderedClaimIds.add(c.id);
+          });
+        }
         draw();
       } catch (e) {
         console.error('Failed to reload saved claims', e);
@@ -544,8 +485,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     async function confirmPendingClaims() {
       if (!pendingClaims.length) return;
+      
       try {
-        // fetch existing saved claims and detect overlaps with the temporary overlay
         let existing = [];
         try {
           const resExisting = await fetch('/claims');
@@ -559,7 +500,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           console.warn('Could not fetch existing claims before confirm', e);
         }
 
-        // collect IDs of existing claims whose saved point lies inside any pending fill (sample temp overlay alpha)
         const idsToDelete = new Set();
         try {
           for (const c of existing) {
@@ -568,15 +508,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
               const d = tempCtx.getImageData(sx, sy, 1, 1).data;
               if (d[3] > 0) idsToDelete.add(c.id);
-            } catch (e) {
-              // sampling can fail if canvas is tainted (shouldn't be) — ignore
-            }
+            } catch (e) {}
           }
         } catch (e) {
           console.warn('Error while checking overlaps on temp overlay', e);
         }
 
-        // delete overlapping claims first
         if (idsToDelete.size) {
           try {
             const delRes = await fetch('/claims/delete', {
@@ -585,17 +522,13 @@ document.addEventListener('DOMContentLoaded', async () => {
               body: JSON.stringify({ ids: Array.from(idsToDelete) })
             });
             if (!delRes.ok) console.warn('Failed to delete overlapping claims', delRes.status);
-            else console.log('Deleted overlapping claims', Array.from(idsToDelete));
           } catch (e) {
             console.warn('Failed to delete overlapping claims', e);
           }
         }
 
-        // Check if any pending claims are "Empty" (removal only)
         const nonEmptyClaims = pendingClaims.filter(c => c.team !== '__EMPTY__');
-        const hasEmptyClaims = pendingClaims.some(c => c.team === '__EMPTY__');
 
-        // Only POST new claims if there are non-empty claims
         if (nonEmptyClaims.length > 0) {
           const res = await fetch('/claims', {
             method: 'POST',
@@ -603,10 +536,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             body: JSON.stringify({ claims: nonEmptyClaims })
           });
           if (!res.ok) throw new Error('Server returned ' + res.status);
-          const body = await res.json();
-          console.log('Saved claims', body);
-        } else if (hasEmptyClaims) {
-          console.log('Only empty claims - deleted overlapping regions without adding new claims');
         }
 
         resetPendingClaims();
@@ -617,14 +546,42 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     }
 
-    // wire toolbar buttons
     const confirmBtn = document.getElementById('confirmBtn');
     const cancelBtn = document.getElementById('cancelBtn');
     const clearDbBtn = document.getElementById('clearDbBtn');
+    const exportBtn = document.getElementById('exportBtn');
     if (confirmBtn) confirmBtn.addEventListener('click', confirmPendingClaims);
     if (cancelBtn) cancelBtn.addEventListener('click', resetPendingClaims);
 
-    // clear DB button (debug) — asks for confirmation and password then calls DELETE /claims
+    if (exportBtn) exportBtn.addEventListener('click', () => {
+      try {
+        const exportCanvas = document.createElement('canvas');
+        exportCanvas.width = img.width;
+        exportCanvas.height = img.height;
+        const exportCtx = exportCanvas.getContext('2d');
+        
+        // Draw overlays first (under the base image)
+        exportCtx.drawImage(savedOverlay, 0, 0);
+        exportCtx.drawImage(tempOverlay, 0, 0);
+        
+        // Draw base image on top
+        exportCtx.drawImage(img, 0, 0);
+        
+        // Convert to PNG and download
+        exportCanvas.toBlob(blob => {
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `map-with-claims-${Date.now()}.png`;
+          a.click();
+          URL.revokeObjectURL(url);
+        }, 'image/png');
+      } catch (err) {
+        console.error('Failed to export', err);
+        alert('Failed to export: ' + err.message);
+      }
+    });
+
     if (clearDbBtn) clearDbBtn.addEventListener('click', async () => {
       if (!confirm('Clear all saved claims from the database? This cannot be undone.')) return;
       const password = prompt('Enter password to clear database:');
@@ -639,13 +596,12 @@ document.addEventListener('DOMContentLoaded', async () => {
           const body = await res.json();
           throw new Error(body.error || 'Server returned ' + res.status);
         }
-        const body = await res.json();
-        console.log('Cleared DB:', body);
-        // clear overlays and reload
-        savedCtx.clearRect(0,0,savedOverlay.width,savedOverlay.height);
-        tempCtx.clearRect(0,0,tempOverlay.width,tempOverlay.height);
+        
+        savedCtx.clearRect(0, 0, savedOverlay.width, savedOverlay.height);
+        tempCtx.clearRect(0, 0, tempOverlay.width, tempOverlay.height);
         overlayComposites.length = 0;
         debugSeeds.length = 0;
+        renderedClaimIds.clear();
         await reloadSavedClaims();
         alert('Database cleared');
       } catch (err) {
@@ -654,21 +610,15 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     });
 
-    // override claimRegion to check image pixel and add pending claim if transparent
     claimRegion = (imgX, imgY) => {
-      if (!isBaseWhiteXY(Math.floor(imgX), Math.floor(imgY))) {
-        console.log('Clicked non-transparent pixel — ignoring claim at', imgX, imgY);
-        return;
+      if (isBaseWhiteXY(Math.floor(imgX), Math.floor(imgY))) {
+        addPendingClaim(imgX, imgY);
       }
-      addPendingClaim(imgX, imgY);
     };
 
-    // ensure we render now that image is available
     draw();
-    // also load saved claims so the overlay shows past fills
     reloadSavedClaims();
     
-    // Poll for new claims every 3 seconds to auto-update from other machines
     let lastClaimCount = 0;
     setInterval(async () => {
       try {
@@ -676,15 +626,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!res.ok) return;
         const body = await res.json();
         const claims = body.claims || [];
-        // Only reload if the number of claims changed
         if (claims.length !== lastClaimCount) {
-          console.log('Claims updated from server:', claims.length, 'claims (was', lastClaimCount, ')');
           lastClaimCount = claims.length;
           await reloadSavedClaims();
         }
-      } catch (e) {
-        // silently ignore polling errors
-      }
+      } catch (e) {}
     }, 3000);
     
   } catch (err) {
@@ -726,7 +672,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     draw();
   }, { passive: false });
 
-  // mouse drag vs click
+  // Mouse drag for panning vs click for claiming
   let isDragging = false;
   let dragStartX = 0, dragStartY = 0;
   let startPanX = 0, startPanY = 0;
@@ -759,24 +705,19 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!isDragging) return;
     if (!hasMoved) {
       const { imgX, imgY } = screenToImage(e.clientX, e.clientY);
-      if (typeof claimRegion === 'function') {
-        claimRegion(imgX, imgY);
-      } else {
-        console.log('click at image coords:', imgX, imgY);
-      }
+      claimRegion(imgX, imgY);
     }
     isDragging = false;
     hasMoved = false;
     canvas.style.cursor = 'default';
   });
 
-  // Touch support with pinch-to-zoom
+  // Touch support with pinch zoom
   let touchStartDist = 0;
   let touchStartScale = 1;
 
   canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
-      // Single touch - pan
       const t = e.touches[0];
       isDragging = true;
       dragStartX = t.clientX;
@@ -785,23 +726,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       startPanY = panY;
       hasMoved = false;
     } else if (e.touches.length === 2) {
-      // Two fingers - zoom
       e.preventDefault();
       const t0 = e.touches[0];
       const t1 = e.touches[1];
       touchStartDist = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
       touchStartScale = scale;
       
-      // Store center point for zoom
       dragStartX = (t0.clientX + t1.clientX) / 2;
       dragStartY = (t0.clientY + t1.clientY) / 2;
-      hasMoved = true; // Prevent click event
+      hasMoved = true;
     }
   }, { passive: false });
 
   canvas.addEventListener('touchmove', (e) => {
     if (e.touches.length === 1 && isDragging) {
-      // Single touch panning
       const t = e.touches[0];
       const dx = t.clientX - dragStartX;
       const dy = t.clientY - dragStartY;
@@ -812,7 +750,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         draw();
       }
     } else if (e.touches.length === 2) {
-      // Pinch zoom
       e.preventDefault();
       const t0 = e.touches[0];
       const t1 = e.touches[1];
@@ -823,12 +760,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         y: (t0.clientY + t1.clientY) / 2
       };
       
-      // Calculate new scale
       const scaleFactor = currentDist / touchStartDist;
       let newScale = touchStartScale * scaleFactor;
       newScale = Math.max(minScale, Math.min(maxScale, newScale));
       
-      // Zoom centered on pinch point
       const rect = canvas.getBoundingClientRect();
       const centerX = currentCenter.x - rect.left;
       const centerY = currentCenter.y - rect.top;
@@ -846,24 +781,22 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   canvas.addEventListener('touchend', (e) => {
     if (e.touches.length === 0) {
-      // All touches ended
       if (!hasMoved && isDragging) {
         const t = e.changedTouches[0];
         const { imgX, imgY } = screenToImage(t.clientX, t.clientY);
-        if (typeof claimRegion === 'function') claimRegion(imgX, imgY);
+        claimRegion(imgX, imgY);
       }
       isDragging = false;
       hasMoved = false;
       touchStartDist = 0;
     } else if (e.touches.length === 1) {
-      // One finger lifted, restart single touch
       const t = e.touches[0];
       isDragging = true;
       dragStartX = t.clientX;
       dragStartY = t.clientY;
       startPanX = panX;
       startPanY = panY;
-      hasMoved = true; // Prevent accidental click after pinch
+      hasMoved = true;
     }
   });
 
