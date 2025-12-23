@@ -1,0 +1,24 @@
+.toolbar {
+    position: fixed;  /* Stays in place when scrolling */
+    top: 0;
+    left: 0;
+    width: 100%;
+    background: white;
+    z-index: 1000;  /* Keeps it above other content */
+    padding: 10px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+
+.canvas-container {
+    width: 100%;
+    height: calc(100vh - 60px);  /* Full height minus toolbar */
+    overflow: hidden;  /* Hide content outside */
+    position: relative;
+    cursor: grab;
+}
+
+canvas {
+    position: absolute;
+    transform-origin: 0 0;  /* Zoom from top-left */
+    /* Transform will be controlled via JavaScript */
+}

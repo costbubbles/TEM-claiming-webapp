@@ -1,0 +1,8 @@
+{
+    "mapImage" : "resources/WorldMap.png",
+    "Teams" : {
+        "Socialists" : {"color": "#ff0000"},
+        "Reactionaries" : {"color": "#0000ff"},
+        "Liberals" : {"color": "#ffff00"}
+    }
+}
