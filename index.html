@@ -9,6 +9,7 @@
     .canvas-container { width:100%; height:100vh; overflow:hidden; }
     canvas { width:100%; height:100%; display:block; background:#FFF; touch-action:none; }
     .toolbar { position:fixed; top:8px; left:8px; z-index:10; background:white; padding:6px; border-radius:4px; }
+    .toolbar-bottom-right { position:fixed; bottom:8px; right:8px; z-index:10; background:white; padding:6px; border-radius:4px; }
     .swatch { display:inline-block; width:18px; height:18px; margin-left:8px; border:1px solid #333; vertical-align:middle; }
   </style>
   <script src="main.js" defer></script>
@@ -21,8 +22,12 @@
     <button id="confirmBtn" title="Confirm claims">Confirm</button>
     <button id="cancelBtn" title="Cancel claims">Cancel</button>
     <button id="exportBtn" title="Export map with claims as PNG">Export PNG</button>
-    <button id="clearDbBtn" title="Clear database (debug)">Clear DB</button>
     <span id="pendingCount" style="margin-left:8px;font-size:12px;color:#333"></span>
+  </div>
+
+  <div class="toolbar-bottom-right">
+    <button id="uploadMapBtn" title="Upload new map PNG">Upload Map</button>
+    <button id="clearDbBtn" title="Clear database (debug)">Clear DB</button>
   </div>
 
   <div id="loadingIndicator" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.8);color:white;padding:20px 40px;border-radius:8px;font-size:18px;z-index:1000;display:none;">

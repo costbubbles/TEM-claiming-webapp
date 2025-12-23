@@ -2,6 +2,9 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
+
+const upload = multer({ dest: 'uploads/' });
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -129,6 +132,47 @@ app.post('/claims/delete', (req, res) => {
       return res.json({ ok: true, deleted: clean.length });
     });
   });
+});
+
+// API: upload map PNG (password protected)
+app.post('/upload-map', upload.single('mapImage'), async (req, res) => {
+  const { password } = req.body || {};
+  if (password !== 'password') {
+    if (req.file) fs.unlinkSync(req.file.path); // clean up uploaded file
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+  
+  if (!req.file.mimetype.startsWith('image/')) {
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({ error: 'File must be an image' });
+  }
+  
+  try {
+    // Read ServerSettings.json to get the current map path
+    const settingsPath = path.join(__dirname, 'ServerSettings.json');
+    const settingsData = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+    const mapPath = path.join(__dirname, settingsData.mapImage);
+    
+    // Backup the old map
+    const backupPath = mapPath + '.backup';
+    if (fs.existsSync(mapPath)) {
+      fs.copyFileSync(mapPath, backupPath);
+    }
+    
+    // Move uploaded file to replace the map
+    fs.copyFileSync(req.file.path, mapPath);
+    fs.unlinkSync(req.file.path);
+    
+    res.json({ ok: true, message: 'Map uploaded successfully' });
+  } catch (err) {
+    console.error('Failed to upload map', err);
+    if (req.file) fs.unlinkSync(req.file.path);
+    res.status(500).json({ error: 'Failed to upload map: ' + err.message });
+  }
 });
 
 // API: list claims

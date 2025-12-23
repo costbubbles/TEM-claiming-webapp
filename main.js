@@ -76,7 +76,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const destW = Math.round(img.width * scale * dpr);
     const destH = Math.round(img.height * scale * dpr);
 
-    // draw overlays FIRST (behind the base image) using identical dest rect for pixel-perfect alignment
+    // draw base image first (device-pixel coords)
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.drawImage(img, 0, 0, img.width, img.height, destX, destY, destW, destH);
+
+    // draw overlays on TOP using identical dest rect for pixel-perfect alignment
     try {
       ctx.setTransform(1,0,0,1,0,0);
       ctx.globalCompositeOperation = 'source-over';
@@ -102,10 +106,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       ctx.globalCompositeOperation = 'source-over';
       ctx.globalAlpha = 1;
     }
-
-    // draw base image on TOP (device-pixel coords) so borders occlude overlay edges
-    ctx.setTransform(1,0,0,1,0,0);
-    ctx.drawImage(img, 0, 0, img.width, img.height, destX, destY, destW, destH);
 
     // helper to map image coords to canvas pixels
     function imgToCanvasX(x) { return x * dpr * scale + panX * dpr; }
@@ -241,9 +241,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     function isBaseWhiteXY(x, y) {
       if (x < 0 || y < 0 || x >= offscreen.width || y >= offscreen.height) return false;
       const idx = (y * offscreen.width + x) * 4;
-      const a = baseData[idx + 3];
-      // check for transparent pixels (alpha === 0)
-      return a === 0;
+      const r = baseData[idx];
+      const g = baseData[idx + 1];
+      const b = baseData[idx + 2];
+      // check for white pixels (RGB 255,255,255)
+      return r === 255 && g === 255 && b === 255;
     }
 
     function sampleBaseRGBA(x, y) {
@@ -302,7 +304,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       const stack = [{ x: sx, y: sy }];
       let filledCount = 0;
       const visited = new Uint8Array(w * h);
-      const borderPixels = []; // track only boundary pixels for overfill
       let minX = w, minY = h, maxX = -1, maxY = -1;
 
       while (stack.length) {
@@ -331,17 +332,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (y < minY) minY = y;
           if (y > maxY) maxY = y;
           
-          // check if this is a border pixel (has at least one non-white orthogonal neighbor)
-          const hasNonWhiteNeighbor = 
-            (i > 0 && !isBaseWhiteXY(i - 1, y)) ||
-            (i < w - 1 && !isBaseWhiteXY(i + 1, y)) ||
-            (y > 0 && !isBaseWhiteXY(i, y - 1)) ||
-            (y < h - 1 && !isBaseWhiteXY(i, y + 1));
-          
-          if (hasNonWhiteNeighbor) {
-            borderPixels.push({ x: i, y: y });
-          }
-          
           i++;
         }
         const x2 = i - 1;
@@ -360,33 +350,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
 
       if (filledCount === 0) return false;
-      
-      // Overfill by 1 pixel orthogonally: only expand border pixels
-      for (const p of borderPixels) {
-        const neighbors = [
-          { x: p.x - 1, y: p.y },
-          { x: p.x + 1, y: p.y },
-          { x: p.x, y: p.y - 1 },
-          { x: p.x, y: p.y + 1 }
-        ];
-        
-        for (const n of neighbors) {
-          if (n.x >= 0 && n.y >= 0 && n.x < w && n.y < h) {
-            const idx = getIndex(n.x, n.y);
-            if (data[idx + 3] === 0) { // if not already filled
-              data[idx] = fillRGBA[0];
-              data[idx + 1] = fillRGBA[1];
-              data[idx + 2] = fillRGBA[2];
-              data[idx + 3] = fillRGBA[3];
-              // update bounding box
-              if (n.x < minX) minX = n.x;
-              if (n.x > maxX) maxX = n.x;
-              if (n.y < minY) minY = n.y;
-              if (n.y > maxY) maxY = n.y;
-            }
-          }
-        }
-      }
       
       overlayCtx.putImageData(imgData, 0, 0);
 
@@ -560,13 +523,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         exportCanvas.height = img.height;
         const exportCtx = exportCanvas.getContext('2d');
         
-        // Draw overlays first (under the base image)
-        exportCtx.drawImage(savedOverlay, 0, 0);
-        exportCtx.drawImage(tempOverlay, 0, 0);
-        
-        // Draw base image on top
+        // Draw base image on bottom
         exportCtx.drawImage(img, 0, 0);
-        
+
+        // Draw overlays top
+        exportCtx.drawImage(savedOverlay, 0, 0);
+                
         // Convert to PNG and download
         exportCanvas.toBlob(blob => {
           const url = URL.createObjectURL(blob);
@@ -580,6 +542,43 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.error('Failed to export', err);
         alert('Failed to export: ' + err.message);
       }
+    });
+
+    const uploadMapBtn = document.getElementById('uploadMapBtn');
+    if (uploadMapBtn) uploadMapBtn.addEventListener('click', async () => {
+      const password = prompt('Enter password to upload map:');
+      if (!password) return;
+      
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/png';
+      input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        const formData = new FormData();
+        formData.append('mapImage', file);
+        formData.append('password', password);
+        
+        try {
+          const res = await fetch('/upload-map', {
+            method: 'POST',
+            body: formData
+          });
+          
+          if (!res.ok) {
+            const body = await res.json();
+            throw new Error(body.error || 'Server returned ' + res.status);
+          }
+          
+          alert('Map uploaded successfully. Reloading page...');
+          window.location.reload();
+        } catch (err) {
+          console.error('Failed to upload map', err);
+          alert('Failed to upload map: ' + err.message);
+        }
+      };
+      input.click();
     });
 
     if (clearDbBtn) clearDbBtn.addEventListener('click', async () => {
